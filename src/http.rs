@@ -3,6 +3,10 @@ use std::{
     net::TcpStream,
 };
 
+use anyhow::{anyhow, Error, Result};
+
+const HTTP_PORT: u32 = 80;
+
 #[derive(Debug, PartialEq)]
 pub struct ParsedUrl {
     pub host: String,
@@ -26,6 +30,76 @@ impl ParsedUrl {
         Some(Self {
             host: String::from(host),
             path: String::from(path),
+        })
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ParsedProxyUrl {
+    pub host: String,
+    pub port: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+impl ParsedProxyUrl {
+    /// new returns a parsed proxy url from given uri
+    /// It's forgiven not to start with 'http://'
+    /// uri format: http://[username:password@]hostname[:port]/
+    pub fn new(uri: &str) -> Result<Self, Error> {
+        let host: String;
+        let mut port = HTTP_PORT.to_string();
+        let mut username: Option<String> = None;
+        let mut password: Option<String> = None;
+        // skipping 'http://'
+        let protocol_pos = uri.find("http://");
+        let mut uri = if let Some(pos) = protocol_pos {
+            &uri[pos.saturating_add(7)..]
+        } else {
+            &uri
+        };
+        // login info parsing
+        if let Some(login_info_pos) = uri.find("@") {
+            let login_info = &uri[..login_info_pos];
+            let username_pos = login_info.find(":");
+            if username_pos.is_none() {
+                return Err(anyhow!("Supplied login info is malformed: {}", login_info));
+            }
+            let username_pos = username_pos.unwrap();
+            if username_pos == 0 {
+                return Err(anyhow!("Expected username in {}", login_info));
+            }
+            if login_info.len().saturating_sub(1) == username_pos {
+                return Err(anyhow!("Expected password in {}", login_info));
+            }
+            username = Some(String::from(&login_info[..username_pos]));
+            password = Some(String::from(&login_info[username_pos.saturating_add(1)..]));
+
+            uri = &uri[login_info_pos.saturating_add(1)..];
+        }
+        // truncate '/' at the end of uri
+        if let Some(slash_pos) = uri.find("/") {
+            uri = &uri[..slash_pos];
+        }
+        // port parsing
+        if let Some(colon_pos) = uri.find(":") {
+            if colon_pos == uri.len().saturating_sub(1) {
+                return Err(anyhow!("Expected port: {}", uri));
+            }
+            let p = &uri[colon_pos.saturating_add(1)..];
+            if p == "0" {
+                return Err(anyhow!("Port 0 is invalid: {}", uri));
+            }
+            host = format!("{}", &uri[..colon_pos]);
+            port = format!("{}", p);
+        } else {
+            host = format!("{}", uri);
+        }
+        Ok(Self {
+            host,
+            port,
+            username,
+            password,
         })
     }
 }
@@ -97,5 +171,85 @@ mod tests {
     fn test_can_return_none_with_invalid_uri() {
         let result = ParsedUrl::new("thisisinvaliduri.com");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_can_parse_valid_full_proxy_uri() {
+        let actual = ParsedProxyUrl::new("http://username:password@example.com:8888/").unwrap();
+        let expected = ParsedProxyUrl {
+            host: String::from("example.com"),
+            port: String::from("8888"),
+            username: Some(String::from("username")),
+            password: Some(String::from("password")),
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_can_parse_valid_proxy_uri_without_some_part() {
+        let actual = ParsedProxyUrl::new("username:password@example.com").unwrap();
+        let expected = ParsedProxyUrl {
+            host: String::from("example.com"),
+            port: String::from(format!("{}", HTTP_PORT)),
+            username: Some(String::from("username")),
+            password: Some(String::from("password")),
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_can_return_error_username_is_not_supplied() {
+        let actual = ParsedProxyUrl::new("http://:password@example.com:8888");
+        let expected_err_msg = "Expected username in";
+        assert!(actual.is_err(), "ParsedProxyUrl should be error");
+        let err_msg = format!("{}", actual.unwrap_err());
+        assert!(
+            err_msg.contains(expected_err_msg),
+            "error message should contain: {}, but actual is: {}",
+            expected_err_msg,
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_can_return_error_password_is_not_supplied() {
+        let actual = ParsedProxyUrl::new("http://username:@example.com:8888");
+        let expected_err_msg = "Expected password in";
+        assert!(actual.is_err(), "ParsedProxyUrl should be error");
+        let err_msg = format!("{}", actual.unwrap_err());
+        assert!(
+            err_msg.contains(expected_err_msg),
+            "error message should contain: {}, but actual is: {}",
+            expected_err_msg,
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_can_return_error_port_is_not_supplied() {
+        let actual = ParsedProxyUrl::new("http://username:password@example.com:");
+        let expected_err_msg = "Expected port";
+        assert!(actual.is_err(), "ParsedProxyUrl should be error");
+        let err_msg = format!("{}", actual.unwrap_err());
+        assert!(
+            err_msg.contains(expected_err_msg),
+            "error message should contain: {}, but actual is: {}",
+            expected_err_msg,
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_can_return_error_invalid_port() {
+        let actual = ParsedProxyUrl::new("http://username:password@example.com:0");
+        let expected_err_msg = "Port 0 is invalid";
+        assert!(actual.is_err(), "ParsedProxyUrl should be error");
+        let err_msg = format!("{}", actual.unwrap_err());
+        assert!(
+            err_msg.contains(expected_err_msg),
+            "error message should contain: {}, but actual is: {}",
+            expected_err_msg,
+            err_msg
+        );
     }
 }

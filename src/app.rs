@@ -2,7 +2,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 
 use anyhow::{anyhow, Context, Result};
 
-use crate::http::{http_get, ParsedUrl};
+use crate::http::{http_get, ParsedProxyUrl, ParsedUrl};
 
 const HTTP_PORT: u32 = 80;
 
@@ -12,11 +12,18 @@ pub trait App {
 
 pub struct Client {
     parsed_url: ParsedUrl,
+    parsed_proxy_url: Option<ParsedProxyUrl>,
 }
 
 impl Client {
     pub fn new(args: &Vec<String>) -> Result<Self> {
-        let idx = 2;
+        let mut idx = 2;
+        let mut parsed_proxy_url: Option<ParsedProxyUrl> = None;
+        if args[idx] == "-p" {
+            idx += 1;
+            parsed_proxy_url = Some(ParsedProxyUrl::new(&args[idx])?);
+            idx += 1;
+        }
 
         let parsed_url = ParsedUrl::new(&args[idx]);
         if parsed_url.is_none() {
@@ -25,6 +32,7 @@ impl Client {
 
         Ok(Self {
             parsed_url: parsed_url.unwrap(),
+            parsed_proxy_url,
         })
     }
 }
@@ -33,7 +41,12 @@ impl App for Client {
     fn run(&mut self) -> Result<()> {
         println!("Connecting to host {}", self.parsed_url.host);
 
-        let addrs = format!("{}:{}", self.parsed_url.host, HTTP_PORT).to_socket_addrs();
+        // resolve ip from hostname
+        let addrs = if let Some(proxy) = &self.parsed_proxy_url {
+            format!("{}:{}", proxy.host, proxy.port).to_socket_addrs()
+        } else {
+            format!("{}:{}", self.parsed_url.host, HTTP_PORT).to_socket_addrs()
+        };
 
         println!("Resolved IP: {:?}", addrs);
 
