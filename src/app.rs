@@ -58,7 +58,7 @@ impl App for Client {
 
         if let Some(addr) = addrs.find(|x| (*x).is_ipv4()) {
             let stream = TcpStream::connect(addr).with_context(|| "Unable to connect to host.")?;
-            http_get(&stream, &self.parsed_url);
+            http_get(&stream, &self.parsed_url, &self.parsed_proxy_url);
         } else {
             return Err(anyhow!("Invalid Host:Port combination."));
         }
